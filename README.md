@@ -79,18 +79,37 @@ Obsidian reads a normal folder, so sync `/srv/vault` with the computer where Obs
 `vaultmcp` user, or add your user to the `vaultmcp` group and make the folder group-writable
 (`sudo chmod -R g+rwX /srv/vault`). Obsidian itself is not needed on the server.
 
-## Optional: public HTTPS later
+## Connect a claude.ai custom connector (OAuth)
 
-Only if you really need to reach it from outside (for example a claude.ai connector): put Caddy in
-front with a domain, open ports 80/443 in the cloud firewall, and keep the bearer token.
-Whether a given client accepts a plain bearer token or demands OAuth depends on the client, check
-its documentation first.
+claude.ai needs a public HTTPS URL and signs in with OAuth. vaultmcp has a small built-in
+authorization server for a single owner: dynamic client registration, authorization code with
+PKCE (S256), refresh token rotation. You prove who you are on the consent page with a password.
 
-```
-notes.example.com {
-    reverse_proxy 127.0.0.1:8787
-}
-```
+1. Pick a public HTTPS entry. With Tailscale Funnel (HTTPS and Funnel must be enabled for the
+   tailnet in the admin console):
+
+   ```bash
+   sudo sed -i "s/^VAULT_ADDR=.*/VAULT_ADDR=127.0.0.1:8787/" /etc/vaultmcp/env   # Funnel proxies to localhost
+   sudo tailscale funnel --bg 8787        # check `tailscale funnel --help` for your version
+   tailscale funnel status                # shows https://<machine>.<tailnet>.ts.net
+   ```
+
+   Any reverse proxy with a certificate (Caddy, nginx) works the same way.
+2. Add to `/etc/vaultmcp/env` (no quotes):
+
+   ```
+   VAULT_PUBLIC_URL=https://<machine>.<tailnet>.ts.net
+   VAULT_OWNER_PASSWORD=<at least 12 characters, generate with: openssl rand -base64 18>
+   ```
+
+   Then `sudo systemctl restart vaultmcp`. State (registered clients, refresh tokens as hashes)
+   lives in `/var/lib/vaultmcp/oauth-state.json`, mode 0600.
+3. In claude.ai: Settings, Connectors, Add custom connector, URL `https://<host>/mcp`, leave
+   the client ID and secret empty (Claude registers itself). Sign in with the owner password.
+
+Notes: after 5 wrong passwords the login is locked for 10 minutes. Access tokens live 1 hour,
+refresh tokens 30 days. The static `VAULT_MCP_TOKEN` keeps working for Claude Code and curl.
+The notes are reachable by anyone who knows the password, so make it long and unique.
 
 ## Build from source
 

@@ -180,7 +180,7 @@ func (h headerRT) RoundTrip(r *http.Request) (*http.Response, error) {
 func TestHTTPAuthAndEndToEnd(t *testing.T) {
 	v := newTestVault(t)
 	token := strings.Repeat("s3cr3t", 6)
-	ts := httptest.NewServer(newHTTPHandler(v, token))
+	ts := httptest.NewServer(newHTTPHandler(v, token, nil))
 	defer ts.Close()
 
 	// Health is open, MCP endpoint is not.

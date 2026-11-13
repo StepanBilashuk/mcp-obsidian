@@ -33,15 +33,21 @@ ENV
   chown root:vaultmcp /etc/vaultmcp/env
   chmod 0640 /etc/vaultmcp/env
   echo "Generated a new token."
+  NEW_ENV=1
 fi
 
 install -m 0644 vaultmcp.service /etc/systemd/system/vaultmcp.service
 systemctl daemon-reload
-systemctl enable --now vaultmcp
+systemctl enable vaultmcp
+systemctl restart vaultmcp
 sleep 1
 systemctl --no-pager --lines=5 status vaultmcp || true
 
 echo
 echo "Health check: $(curl -fsS http://127.0.0.1:8787/healthz || echo FAILED)"
-echo "Token (keep it secret): $(grep '^VAULT_MCP_TOKEN=' /etc/vaultmcp/env | cut -d= -f2)"
+if [[ "${NEW_ENV:-0}" == 1 ]]; then
+  echo "Token (keep it secret): $(grep '^VAULT_MCP_TOKEN=' /etc/vaultmcp/env | cut -d= -f2)"
+else
+  echo "Existing /etc/vaultmcp/env kept (token not shown)."
+fi
 echo "The server listens on 127.0.0.1 only. See README.md for how to connect."

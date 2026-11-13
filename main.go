@@ -19,7 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func textResult(s string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}
@@ -160,13 +160,25 @@ func buildServer(v *Vault) *mcp.Server {
 	return s
 }
 
-// bearerAuth rejects requests that do not carry the expected bearer token.
-func bearerAuth(token string, next http.Handler) http.Handler {
+// bearerAuth accepts either the static owner token or, when oauth is not nil,
+// a live OAuth access token. Anything else gets a 401 that points clients at
+// the protected resource metadata so they can start the OAuth flow.
+func bearerAuth(token string, oauth *oauthServer, next http.Handler) http.Handler {
 	want := []byte("Bearer " + token)
+	challenge := `Bearer realm="vaultmcp"`
+	if oauth != nil {
+		challenge += `, resource_metadata="` + oauth.metadataURL() + `"`
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := []byte(r.Header.Get("Authorization"))
-		if subtle.ConstantTimeCompare(got, want) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="vaultmcp"`)
+		hdr := r.Header.Get("Authorization")
+		ok := subtle.ConstantTimeCompare([]byte(hdr), want) == 1
+		if !ok && oauth != nil {
+			if t, found := strings.CutPrefix(hdr, "Bearer "); found {
+				ok = oauth.validAccessToken(t)
+			}
+		}
+		if !ok {
+			w.Header().Set("WWW-Authenticate", challenge)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -175,15 +187,32 @@ func bearerAuth(token string, next http.Handler) http.Handler {
 	})
 }
 
-func newHTTPHandler(v *Vault, token string) http.Handler {
+func newHTTPHandler(v *Vault, token string, oauth *oauthServer) http.Handler {
 	server := buildServer(v)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
-	mux.Handle("/mcp", bearerAuth(token, mcpHandler))
+	if oauth != nil {
+		oauth.register(mux)
+	}
+	mux.Handle("/mcp", bearerAuth(token, oauth, mcpHandler))
 	return mux
+}
+
+// oauthFromEnv enables OAuth when VAULT_PUBLIC_URL is set.
+func oauthFromEnv() (*oauthServer, error) {
+	base := strings.TrimSpace(os.Getenv("VAULT_PUBLIC_URL"))
+	if base == "" {
+		return nil, nil
+	}
+	pw := os.Getenv("VAULT_OWNER_PASSWORD")
+	stateDir := os.Getenv("VAULT_STATE_DIR")
+	if stateDir == "" {
+		stateDir = os.Getenv("STATE_DIRECTORY")
+	}
+	return newOAuthServer(base, pw, stateDir)
 }
 
 func main() {
@@ -217,9 +246,13 @@ func main() {
 		if len(token) < 24 {
 			log.Fatal("set VAULT_MCP_TOKEN to a random secret of at least 24 characters (for example: openssl rand -hex 32)")
 		}
+		oauth, err := oauthFromEnv()
+		if err != nil {
+			log.Fatalf("oauth: %v", err)
+		}
 		srv := &http.Server{
 			Addr:              *addr,
-			Handler:           newHTTPHandler(v, token),
+			Handler:           newHTTPHandler(v, token, oauth),
 			ReadHeaderTimeout: 10 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		}
@@ -229,6 +262,9 @@ func main() {
 			defer cancel()
 			_ = srv.Shutdown(shutCtx)
 		}()
+		if oauth != nil {
+			log.Printf("oauth enabled, public URL %s", oauth.baseURL)
+		}
 		log.Printf("vaultmcp %s listening on http://%s/mcp (vault: %s)", version, *addr, v.root)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http: %v", err)
