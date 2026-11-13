@@ -1,0 +1,31 @@
+[Unit]
+Description=Vault MCP server (markdown notes for Claude)
+After=network.target
+
+[Service]
+User=vaultmcp
+Group=vaultmcp
+EnvironmentFile=/etc/vaultmcp/env
+ExecStart=/usr/local/bin/vaultmcp -mode http -addr ${VAULT_ADDR} -vault ${VAULT_DIR}
+Restart=on-failure
+RestartSec=3
+
+# Hardening: the service can only write inside the vault.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/srv/vault
+UMask=0027
+MemoryMax=300M
+
+[Install]
+WantedBy=multi-user.target
